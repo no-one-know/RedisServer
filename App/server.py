@@ -1,7 +1,7 @@
-import socket  
-import threading
+import socket, threading, time
 
 valid_commands = ["ping", "info", "exit", "echo", "get", "set", "px"]
+temp_cache_store = {}
 
 def parse_bulk_string(command):
     length = int(command[1])
@@ -82,18 +82,48 @@ def parse_input_command_and_send_response(data, connection):
         connection.sendall("-ERR unknown command\r\n".encode())
     command_attributes = command_response.split(' ')
     print("Command attributes: ", command_attributes)
-    command = command_attributes[0]
-    if command.lower() not in valid_commands:
+    command = command_attributes[0].lower()
+    if command not in valid_commands:
         connection.sendall("-ERR unknown command\r\n".encode())
-    if command.lower() == "ping":
+    if command == "ping":
         connection.sendall("+PONG\r\n".encode())
-    elif command.lower() == "info":
+    elif command == "info":
         connection.sendall("+INFO\r\n".encode())
-    elif command.lower() == "exit":
+    elif command == "exit":
         connection.sendall("+OK\r\n".encode())
         connection.close()
-    elif command.lower() == "echo":
+    elif command == "echo":
         connection.sendall((f"${len(command_attributes[1])}"+"\r\n"+command_attributes[1]+"\r\n").encode())
+    elif command == "get":
+        key = command_attributes[1]
+        if temp_cache_store.get(key) is None:
+            connection.sendall("$-1\r\n".encode())
+        val = temp_cache_store[key]
+        if val.get("exp") is not None:
+            if val["exp"] < time.time():
+                temp_cache_store.pop(key)
+                connection.sendall("$-1\r\n".encode())
+            else:
+                connection.sendall((f"${len(val['value'])}"+"\r\n"+val['value']+"\r\n").encode())
+        else:
+            connection.sendall((f"${len(val['value'])}"+"\r\n"+val['value']+"\r\n").encode())
+    elif command == "set":
+        key = command_attributes[1]
+        value = command_attributes[2]
+        if len(command_attributes) == 5:
+            exp = command_attributes[3]
+            exp_value = int(command_attributes[4])
+            if exp.lower() == "px":
+                temp_cache_store[key] = {"value": value, "exp": time.time() + float(exp_value)/1000}
+                connection.sendall("+OK\r\n".encode())
+            elif exp.lower() == "ex":
+                temp_cache_store[key] = {"value": value, "exp": time.time() + exp_value}
+                connection.sendall("+OK\r\n".encode())
+            else:
+                connection.sendall("-ERR unknown command\r\n".encode())
+        else:
+            temp_cache_store[key] = {"value": value}
+            connection.sendall("+OK\r\n".encode())
     
 def handle_client(connection, address):
     while(True):
@@ -103,6 +133,7 @@ def handle_client(connection, address):
         data = data.decode('utf-8').replace("\\n", "\n").replace("\\r", "\r").strip()
         # Now we will parse the input data and send the appropriate response
         parse_input_command_and_send_response(data, connection)
+        print("temp_cache_store: ", temp_cache_store)
     connection.close()
 
 def main():
